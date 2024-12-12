@@ -56,6 +56,8 @@
             <p>Total games: <span id="totalGames">0</span></p>
             <p>Total wins: <span id="totalWins">0</span></p>
             <p>Total losses: <span id="totalLosses">0</span></p>
+            <p>Win Rate: <span id="winRate">0%</span></p>
+            <ul id="lastGamesList"></ul>
         </section>
 
         <!-- Список игр -->
@@ -76,7 +78,9 @@
         </section>
     </main>
 
-    <script src="script.js"></script>
+    <script src="https://unpkg.com/idb@7.0.0/build/umd.js"></script>
+    <script type="module" src="./db.js"></script>
+    <script type="module" src="./script.js"></script>
 </body>
 
 </html>

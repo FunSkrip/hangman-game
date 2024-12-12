@@ -1,3 +1,5 @@
+import { saveGame as saveToDB, getAllGames, getGameById, updateGame, deleteGame, getGamesByUser } from './db.js';
+
 class HangmanGame {
     constructor() {
         this.wordList = ["apple", "banana", "cherry", "orange", "grape", "lemon"];
@@ -25,26 +27,24 @@ class HangmanGame {
 
     guessLetter(letter) {
         if (this.gameOver || this.guessedLetters.includes(letter)) return null;
-        // Если игрок вводит целое слово
+
         if (letter.length > 1) {
             if (letter === this.currentWord) {
-                // Игрок угадал слово
-                this.maskedWord = this.currentWord.split(""); // Раскрываем слово
+                this.maskedWord = this.currentWord.split("");
                 this.gameOver = true;
                 if (this.onGameEnd) this.onGameEnd(true);
                 return "win";
             } else {
-                // Игрок ошибся
                 this.attemptsLeft--;
                 if (this.attemptsLeft === 0) {
                     this.gameOver = true;
                     if (this.onGameEnd) this.onGameEnd(false);
                     return "lose";
                 }
-                return "wrongWord"; // Новый статус для неправильного слова
+                return "wrongWord";
             }
         }
-        
+
         this.guessedLetters.push(letter);
 
         if (this.currentWord.includes(letter)) {
@@ -67,6 +67,7 @@ class HangmanGame {
         }
         return "continue";
     }
+
     getHangmanState() {
         return this.hangmanStates[this.maxAttempts - this.attemptsLeft];
     }
@@ -97,10 +98,11 @@ const statisticsSection = document.getElementById("statisticsSection");
 const gamesListSection = document.getElementById("gamesListSection");
 const helpSection = document.getElementById("helpSection");
 
-// Статистика
+// Инициализация
+var hangmanGame = new HangmanGame();
+showSection(nameInputSection);
 const userProfiles = {};
 let currentUser = null;
-let hangmanGame = null;
 
 // Обновить UI игры
 function updateGameUI() {
@@ -118,7 +120,7 @@ function startNewGame() {
 }
 
 // Сделать ход
-function makeGuess() {
+async function makeGuess() {
     const guess = guessInput.value.toLowerCase();
     guessInput.value = "";
 
@@ -132,36 +134,42 @@ function makeGuess() {
 
     if (result === "win") {
         alert("You won!");
-        userProfiles[currentUser].wins++;
-        saveGame(true);
+        await saveGame(true);
     } else if (result === "lose") {
         alert(`Game over! The word was: ${hangmanGame.currentWord}`);
-        userProfiles[currentUser].losses++;
-        saveGame(false);
+        await saveGame(false);
     }
 }
 
-// Сохранить игру
-function saveGame(won) {
-    userProfiles[currentUser].games.push({
+// Сохранить игру в IndexedDB
+async function saveGame(won) {
+    const gameData = {
+        user: currentUser,
         word: hangmanGame.currentWord,
         attemptsLeft: hangmanGame.attemptsLeft,
         guessedLetters: [...hangmanGame.guessedLetters],
         won,
-    });
+        timestamp: new Date().toISOString()
+    };
+
+    await saveToDB(gameData);
+    await loadUserGames();
 }
 
-// Показать статистику
-function showStatistics() {
-    const userStats = userProfiles[currentUser];
-    document.getElementById("totalGames").textContent = userStats.games.length;
-    document.getElementById("totalWins").textContent = userStats.wins;
-    document.getElementById("totalLosses").textContent = userStats.losses;
-    showSection(statisticsSection);
+// Загрузка всех игр пользователя из IndexedDB
+async function loadUserGames() {
+    const games = await getGamesByUser(currentUser);
+    userProfiles[currentUser] = {
+        games,
+        wins: games.filter((game) => game.won).length,
+        losses: games.filter((game) => !game.won).length
+    };
 }
 
 // Показать список игр
-function showGamesList() {
+async function showGamesList() {
+    await loadUserGames();
+
     const gamesListElem = document.getElementById("gamesList");
     gamesListElem.innerHTML = "";
 
@@ -169,50 +177,84 @@ function showGamesList() {
         const li = document.createElement("li");
         li.innerHTML = `
             Game ${index + 1}: Word: ${game.word}, Won: ${game.won ? "Yes" : "No"}
-            <button class="replay-btn" data-game-index="${index}">🔄 Replay</button>
+            <button class="replay-btn" data-game-id="${game.id}">🔄 Replay</button>
+            <button class="delete-btn" data-game-id="${game.id}">❌ Delete</button>
         `;
         gamesListElem.appendChild(li);
     });
 
-    // Добавляем обработчики на кнопки "Replay"
-    const replayButtons = document.querySelectorAll(".replay-btn");
-    replayButtons.forEach((btn) => {
-        btn.addEventListener("click", (e) => {
-            const gameIndex = e.target.dataset.gameIndex;
-            replayGame(gameIndex);
+    document.querySelectorAll(".replay-btn").forEach((btn) => {
+        btn.addEventListener("click", async (e) => {
+            const gameId = parseInt(e.target.dataset.gameId);
+            const game = await getGameById(gameId);
+            replayGame(game);
+        });
+    });
+
+    document.querySelectorAll(".delete-btn").forEach((btn) => {
+        btn.addEventListener("click", async (e) => {
+            const gameId = parseInt(e.target.dataset.gameId);
+            await deleteGame(gameId);
+            await showGamesList();
         });
     });
 
     showSection(gamesListSection);
 }
-// Повтор игры
-function replayGame(gameIndex) {
-    const savedGame = userProfiles[currentUser].games[gameIndex];
 
-    // Восстанавливаем состояние игры
+// Повтор игры
+function replayGame(savedGame) {
     hangmanGame.currentWord = savedGame.word;
-    hangmanGame.maskedWord = "_".repeat(savedGame.word.length).split(""); // savedGame.word.split("").map((char) => 
-    //     savedGame.guessedLetters.includes(char) ? char : "_"
-    // );
-    hangmanGame.guessedLetters = []; // [...savedGame.guessedLetters];
-    hangmanGame.attemptsLeft = 6; // hangmanGame.maxAttempts - (savedGame.guessedLetters.length - savedGame.word.split("").filter(char => savedGame.guessedLetters.includes(char)).length);
+    hangmanGame.maskedWord = savedGame.word.split("").map((char) =>
+        savedGame.guessedLetters.includes(char) ? char : "_"
+    );
+    hangmanGame.guessedLetters = [...savedGame.guessedLetters];
+    hangmanGame.attemptsLeft = savedGame.attemptsLeft;
     hangmanGame.gameOver = false;
 
-    // Обновляем UI
     updateGameUI();
     showSection(gameSection);
 
-    // Устанавливаем обработчик завершения игры для обновления результата
-    hangmanGame.onGameEnd = (result) => updateSavedGame(gameIndex, result);
+    hangmanGame.onGameEnd = async (won) => {
+        await updateGame(savedGame.id, {
+            won,
+            attemptsLeft: hangmanGame.attemptsLeft,
+            guessedLetters: [...hangmanGame.guessedLetters],
+        });
+        await showGamesList();
+    };
 }
 
-// Обновление сохранённой игры
-function updateSavedGame(gameIndex, won) {
-    const savedGame = userProfiles[currentUser].games[gameIndex];
-    savedGame.won = won;
-    savedGame.attemptsLeft = hangmanGame.attemptsLeft;
-    savedGame.guessedLetters = [...hangmanGame.guessedLetters];
-    showGamesList(); // Обновляем список игр
+// Показать статистику
+async function showStatistics() {
+    // Загрузить статистику пользователя
+    await loadUserGames();
+
+    const userStats = userProfiles[currentUser];
+    const { games, wins, losses } = userStats;
+
+    // Заполнить статистику
+    document.getElementById("totalGames").textContent = games.length;
+    document.getElementById("totalWins").textContent = wins;
+    document.getElementById("totalLosses").textContent = losses;
+
+    // Рассчитать процент побед
+    const winRate = games.length > 0 ? ((wins / games.length) * 100).toFixed(2) : 0;
+    document.getElementById("winRate").textContent = `${winRate}%`;
+
+    // Показать последние 5 игр
+    const lastGamesList = document.getElementById("lastGamesList");
+    lastGamesList.innerHTML = ""; // Очистить список
+
+    const lastGames = games.slice(-5).reverse(); // Последние 5 игр
+    lastGames.forEach((game, index) => {
+        const li = document.createElement("li");
+        li.textContent = `Game ${games.length - index}: Word: ${game.word}, Result: ${game.won ? "Win" : "Loss"}`;
+        lastGamesList.appendChild(li);
+    });
+
+    // Показать секцию
+    showSection(statisticsSection);
 }
 
 
@@ -227,30 +269,31 @@ function showSection(section) {
 }
 
 // Вход пользователя
-function signIn() {
+async function signIn() {
     const name = nameInput.value.trim();
     if (!name) {
         alert("Please enter a valid name.");
         return;
     }
 
-    if (!userProfiles[name]) {
-        userProfiles[name] = { games: [], wins: 0, losses: 0 };
-    }
-
     currentUser = name;
-    profile.textContent = "👤" + name;
-    hangmanGame = new HangmanGame();
+    profile.textContent = "👤 " + name;
+
+    await loadUserGames();
     startNewGame();
 }
 
-// Выход пользователя
 function signOut() {
+    // Очистить данные текущего пользователя
     currentUser = null;
-    hangmanGame = null;
-    profile.textContent = "👤";
+    profile.textContent = ""; // Очистить отображение имени пользователя
+
     showSection(nameInputSection);
+
+    hangmanGame.resetGame();
+    updateGameUI();
 }
+
 
 // Слушатели событий
 signInBtn.addEventListener("click", signIn);
@@ -270,3 +313,5 @@ guessInput.addEventListener("keydown", (event) => {
         makeGuess();
     }
 });
+
+
